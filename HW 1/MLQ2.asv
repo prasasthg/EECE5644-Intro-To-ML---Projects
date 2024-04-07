@@ -1,0 +1,153 @@
+clear all; close all; clc;
+
+% INPUT PARAMETERS
+n = 3; %3D Gaussian
+m = 4; %4 mixtures
+sample_size = 10000;
+N_C = 3; 
+priori = [0.3, 0.3, 0.4];
+
+% Mean vectors
+m1 = [0, 0, 20];
+m2 = [0, 20, 0];
+m3 = [20, 0, 0];
+m4 = [20, 0, 20];
+
+% Covariance matrices
+cvm1 = 36 * (eye(n) + (0.01 * randn(n, n))).^2;
+cvm2 = 36 * (eye(n) + (0.02 * randn(n, n))).^2;
+cvm3 = 36 * (eye(n) + (0.03 * randn(n, n))).^2;
+cvm4 = 36 * (eye(n) + (0.04 * randn(n, n))).^2;
+
+% Prior weights for Class 2
+weights = [0.5, 0.5];
+
+%Class Label and Input Generation
+[C_L,smple,mean,cvm] = input_and_class_labels(m,weights,priori,sample_size,m1,m2,m3,m4,cvm1,cvm2,cvm3,cvm4,n);
+
+
+LMA = ones(N_C) - eye(N_C);
+LMB = [0, 1, 10; 1, 0, 10; 1, 1, 0];
+LMC = [0, 1, 100; 1, 0, 100; 1, 1, 0];
+
+LM = input_loss_m(LMA,LMB,LMC);
+disp('Loss Matrix Chosen:')
+disp(LM);
+
+%PDF of each conditional class
+prob_X_given_L = zeros(N_C, sample_size);
+for i = 1:N_C
+        prob_X_given_L(i,:) = mvnpdf(smple, mean(i,:), squeeze(cvm(:,:,i)));
+end
+
+%Posterior Calculation
+prob_X = priori * prob_X_given_L;
+class_Pos = (prob_X_given_L .* repmat(priori', 1, sample_size))./repmat(prob_X, N_C, 1);
+
+[conf_M, avg_exp_risk,dec] = calc_risk_and_confusion_matrix(LM,class_Pos,sample_size,N_C,C_L);
+
+%PLOTTING OUTPUT
+plot_output(smple,C_L,dec)
+
+%Printing OUTPUT
+fprintf('Avg Expected Risk = %.4f\n', avg_exp_risk);
+disp('Confusion Matrix = ');
+disp(conf_M);
+
+
+%Functions
+function [C_L,smple,mean,cvm] = input_and_class_labels(m,weights,priori,sample_size,m1,m2,m3,m4,cvm1,cvm2,cvm3,cvm4,n)
+    mean = [m1;m2;m3;m4];
+    cvm = zeros(n, n, m);
+    cvm (:, :, 1) = cvm1;
+    cvm (:, :, 2) = cvm2;
+    cvm (:, :, 3) = cvm3;
+    cvm (:, :, 4) = cvm4;
+    CP_Cumulative = cumsum(priori);
+    rand = randn(sample_size, 1);
+    C_L = zeros(size(rand));
+
+    %Generating Class Labels
+    for i = 1:sample_size
+        if rand(i) <= CP_Cumulative(1)
+            C_L(i) = 0;
+        elseif rand(i) <= CP_Cumulative(2)
+            C_L(i) = 1;
+        else 
+            C_L(i) = 2;
+        end
+    end
+    
+    %sample generation
+    smple = zeros(10000, n);
+    
+    cvm(:,:,1) = (cvm(:,:,1) + cvm(:,:,1)')/2;
+    cvm(:,:,2) = (cvm(:,:,2) + cvm(:,:,2)')/2;
+    cvm(:,:,3) = (cvm(:,:,3) + cvm(:,:,3)')/2;
+    cvm(:,:,4) = (cvm(:,:,4) + cvm(:,:,4)')/2;
+    
+    for i = 1:sample_size
+        if C_L(i) == 0
+            smple(i, :) = mvnrnd(mean(1,:), squeeze(cvm(:,:,1)));
+        elseif C_L(i) == 1
+            smple(i, :) = mvnrnd(mean(2,:), squeeze(cvm(:,:,2)));
+        elseif C_L(i) == 2
+            if rand(1,1) >= weights(1)
+                smple(i,:) = mvnrnd(mean(3,:), squeeze(cvm(:,:,3)));
+            else
+                smple(i,:) = mvnrnd(mean(4,:), squeeze(cvm(:,:,4)));
+            end
+        end
+    end
+
+end
+
+function LM = input_loss_m(LMA,LMB,LMC)
+    ip = input("INPUT LOSS MATRIX (Enter 1,2 or 3): ");
+    if ip == 1
+        LM = LMA;
+    elseif ip == 2
+        LM = LMB;
+    elseif ip == 3
+        LM = LMC;
+    end
+end
+
+function [conf_M, avg_exp_risk,dec] = calc_risk_and_confusion_matrix(LM,class_Pos,sample_size,N_C,C_L)
+    exp_risk = LM * class_Pos;
+    [~, dec] = min(exp_risk, [], 1);
+    dec = dec-1;
+    dec = dec';
+    avg_exp_risk = sum(min(exp_risk, [], 1))/sample_size;
+    
+    conf_M = zeros(N_C);
+    for i = 1:N_C
+        for j = 1:N_C
+            conf_M(i,j) = numel(find((i-1 == dec) & (j-1 == C_L)))/numel(find(C_L == j-1));
+        end
+    end
+end
+
+function plot_output(smple,C_L,dec)
+    smple1 = smple(:,1);
+    smple2 = smple(:,2);
+    smple3 = smple(:,3);
+    fig = figure;
+    ax = axes('Parent',fig,'Projection','Perspective');
+    figure(1)
+    scatter3(ax, smple1(C_L==0 & dec==0), smple2(C_L==0 & dec==0), smple3(C_L==0 & dec==0),'*','g');
+    hold on;
+    scatter3(ax, smple1(C_L==0 & dec==1), smple2(C_L==0 & dec==1), smple3(C_L==0 & dec==1),'*','r');
+    scatter3(ax, smple1(C_L==0 & dec==2), smple2(C_L==0 & dec==2), smple3(C_L==0 & dec==2),'*','r');
+    scatter3(ax, smple1(C_L==1 & dec==0), smple2(C_L==1 & dec==0), smple3(C_L==1 & dec==0),'+','r');
+    scatter3(ax, smple1(C_L==1 & dec==1), smple2(C_L==1 & dec==1), smple3(C_L==1 & dec==1),'+','g');
+    scatter3(ax, smple1(C_L==1 & dec==2), smple2(C_L==1 & dec==2), smple3(C_L==1 & dec==2),'+','r');
+    scatter3(ax, smple1(C_L==2 & dec==0), smple2(C_L==2 & dec==0), smple3(C_L==2 & dec==0),'X','r');
+    scatter3(ax, smple1(C_L==2 & dec==1), smple2(C_L==2 & dec==1), smple3(C_L==2 & dec==1),'X','r');
+    scatter3(ax, smple1(C_L==2 & dec==2), smple2(C_L==2 & dec==2), smple3(C_L==2 & dec==2),'X','g');
+    xlabel('X1');
+    ylabel('X2');
+    zlabel('X3');
+    grid on;
+    legend show;
+end
